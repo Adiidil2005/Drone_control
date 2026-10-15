@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DRONE-CTRL // WebRTC Direct Link</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-0:#050a10; --phosphor:#3dffa0; --phosphor-dim:#1d8f5c;
+    --amber:#ffb23d; --red:#ff4d4d; --panel-border:rgba(61,255,160,0.25);
+  }
+  *{box-sizing:border-box;}
+  html,body{ margin:0;padding:0;height:100%; background:var(--bg-0);
+    font-family:'Share Tech Mono', monospace; color:var(--phosphor); overflow:hidden; user-select:none; }
+  #app{ position:relative; width:100vw; height:100vh; }
+  #remoteVideo{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
+
+  #topbar{
+    position:absolute; top:0; left:0; right:0; height:52px; z-index:20;
+    display:flex; align-items:center; justify-content:space-between; padding:0 18px; gap:14px;
+    background:linear-gradient(180deg, rgba(5,10,16,0.95), rgba(5,10,16,0));
+  }
+  .brand{ font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:3px; font-size:15px; }
+  .brand span{ color:var(--phosphor-dim); font-weight:500; }
+  #conn-cluster{ display:flex; align-items:center; gap:8px; }
+  input, select{
+    background:rgba(5,10,16,0.85); color:var(--phosphor); border:1px solid var(--panel-border);
+    font-family:'Share Tech Mono',monospace; font-size:11px; padding:6px 10px; border-radius:2px;
+  }
+  button{
+    font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:1px; font-size:11px;
+    background:transparent; border:1px solid var(--phosphor-dim); color:var(--phosphor);
+    padding:7px 14px; border-radius:2px; cursor:pointer;
+  }
+  button:hover{ border-color:var(--phosphor); }
+  #btn-refresh{ width:30px; padding:6px 0; text-align:center; font-size:14px; }
+  button.arm{ border-color:var(--red); color:var(--red); }
+  button.armed-active{ background:var(--red); color:var(--bg-0); }
+  .status-dot{ width:7px; height:7px; border-radius:50%; background:var(--red); display:inline-block; margin-right:6px; }
+  #link-status.connected .status-dot{ background:var(--phosphor); box-shadow:0 0 6px var(--phosphor); }
+
+  .hud-layer{ position:absolute; inset:0; pointer-events:none; z-index:10; }
+  .corner-panel{
+    position:absolute; font-size:11px; letter-spacing:1px; line-height:1.9;
+    background:rgba(5,10,16,0.55); border:1px solid var(--panel-border); padding:10px 14px; border-radius:2px;
+  }
+  #panel-tl{ top:66px; left:22px; }
+  #panel-tr{ top:66px; right:22px; text-align:right; }
+  .kv .k{ color:var(--phosphor-dim); margin-right:8px; }
+  .kv b{ color:var(--phosphor); }
+  #armed-flag{ padding:2px 8px; border:1px solid currentColor; border-radius:2px; font-weight:bold; }
+  #failsafe-banner{
+    position:absolute; left:50%; top:104px; transform:translateX(-50%);
+    font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:2px; font-size:14px;
+    padding:7px 22px; border:1px solid var(--amber); border-radius:2px; color:var(--amber);
+    opacity:0; transition:opacity .2s ease; z-index:16; background:rgba(5,10,16,0.75);
+  }
+  #failsafe-banner.show{ opacity:1; }
+  #failsafe-banner.descend{ border-color:var(--red); color:var(--red); animation:blink .5s infinite; }
+  @keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:.3;} }
+
+  #controls-hint{
+    position:absolute; left:22px; bottom:24px; font-size:10px; color:var(--phosphor-dim);
+    letter-spacing:1px; line-height:1.6; max-width:420px; pointer-events:none;
+  }
+  #stick-viz{
+    position:absolute; right:22px; bottom:22px; width:140px; height:140px;
+    border:1px solid var(--panel-border); border-radius:4px; background:rgba(5,10,16,0.55);
+  }
+  #stick-dot{
+    position:absolute; width:10px; height:10px; border-radius:50%; background:var(--phosphor);
+    box-shadow:0 0 8px var(--phosphor); left:50%; top:50%; transform:translate(-50%,-50%);
+  }
+  #throttle-bar-track{
+    position:absolute; right:170px; bottom:22px; width:14px; height:140px;
+    border:1px solid var(--panel-border); background:rgba(5,10,16,0.55); border-radius:2px;
+  }
+  #throttle-bar-fill{ position:absolute; bottom:0; left:0; right:0; background:var(--phosphor); height:0%; }
+</style>
+</head>
+<body>
+<div id="app">
+  <video id="remoteVideo" autoplay playsinline muted></video>
+
+  <div id="topbar">
+    <div class="brand">DRONE<span>-CTRL</span></div>
+    <div id="conn-cluster">
+      <input id="signaling-url" value="ws://localhost:9090/ws" size="30">
+      <select id="drone-select"><option value="drone-1">drone-1</option></select>
+      <button id="btn-refresh" title="Ask the signaling server which drones are currently online">&#8635;</button>
+      <button id="btn-connect">CONNECT</button>
+      <button id="btn-arm" class="arm">ARM</button>
+      <span id="link-status"><span class="status-dot"></span>DISCONNECTED</span>
+    </div>
+  </div>
+
+  <div class="hud-layer">
+    <div id="panel-tl" class="corner-panel">
+      <div class="kv"><span class="k">ARMED</span><span id="armed-flag">DISARMED</span></div>
+      <div class="kv"><span class="k">ROLL</span><b id="tel-roll">0.0</b>&deg;</div>
+      <div class="kv"><span class="k">PITCH</span><b id="tel-pitch">0.0</b>&deg;</div>
+      <div class="kv"><span class="k">YAW</span><b id="tel-yaw">0.0</b>&deg;</div>
+    </div>
+    <div id="panel-tr" class="corner-panel">
+      <div class="kv"><b id="tel-alt">0</b> cm <span class="k">ALT</span></div>
+      <div class="kv"><b id="tel-batt">0.0</b> V <span class="k">BATTERY</span></div>
+    </div>
+
+    <div id="failsafe-banner">LINK LOST — ATTITUDE HOLD</div>
+
+    <div id="controls-hint">
+      W/A/S/D = pitch/roll &middot; Q/E = yaw &middot; SHIFT/SPACE = throttle down/up &middot;
+      sends real setpoints over an unreliable WebRTC data channel &mdash; only takes effect once ARMED.
+    </div>
+
+    <div id="stick-viz"><div id="stick-dot"></div></div>
+    <div id="throttle-bar-track"><div id="throttle-bar-fill"></div></div>
+  </div>
+</div>
+
+<script>
+/* ===================================================================
+   This client's offer/answer/data-channel flow was verified against the
+   real Pi-side aiortc code (pi_webrtc_client.py) in the sandbox this
+   shipped from - including the requirement below, which was found by
+   actually testing it: the video transceiver MUST be added before
+   createOffer(), or the drone (answerer) has no video m-line to answer
+   into and negotiation fails. Also note: both sides wait for full ICE
+   gathering before exchanging SDP (non-trickle) - matches aiortc's own
+   behavior, and keeps this signaling protocol to just offer/answer,
+   no separate candidate-exchange messages needed.
+   =================================================================== */
+
+let ws = null, pc = null, controlChannel = null, telemetryChannel = null;
+const myId = 'controller-' + Math.random().toString(36).slice(2, 8);
+
+function setLinkStatus(kind, text){
+  const el = document.getElementById('link-status');
+  el.className = kind;
+  el.innerHTML = '<span class="status-dot"></span>' + text;
+}
+
+function waitForIceGatheringComplete(peerConnection){
+  if(peerConnection.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise(resolve=>{
+    function check(){
+      if(peerConnection.iceGatheringState === 'complete'){
+        peerConnection.removeEventListener('icegatheringstatechange', check);
+        resolve();
+      }
+    }
+    peerConnection.addEventListener('icegatheringstatechange', check);
+  });
+}
+
+function ensureRegistered(){
+  const signalingUrl = document.getElementById('signaling-url').value.trim();
+  if(ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
+  return new Promise((resolve, reject)=>{
+    setLinkStatus('connecting', 'CONNECTING...');
+    ws = new WebSocket(signalingUrl);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({type:'register', id: myId, role:'controller'}));
+      setLinkStatus('connecting', 'REGISTERED, IDLE');
+      resolve();
+    };
+    ws.onerror = (e) => { setLinkStatus('disconnected', 'WS ERROR'); reject(e); };
+    ws.onclose = () => setLinkStatus('disconnected', 'DISCONNECTED');
+    ws.onmessage = async (evt) => {
+      const msg = JSON.parse(evt.data);
+      if(msg.type === 'answer' && pc){
+        await pc.setRemoteDescription({type:'answer', sdp: msg.sdp});
+        setLinkStatus('connected', 'LINKED');
+      } else if(msg.type === 'drone_list'){
+        populateDroneList(msg.drones);
+      }
+    };
+  });
+}
+
+function populateDroneList(drones){
+  const sel = document.getElementById('drone-select');
+  const current = sel.value;
+  sel.innerHTML = '';
+  if(drones.length === 0){
+    const opt = document.createElement('option');
+    opt.textContent = 'no drones online';
+    opt.disabled = true;
+    sel.appendChild(opt);
+    return;
+  }
+  drones.forEach(id=>{
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = id;
+    sel.appendChild(opt);
+  });
+  if(drones.includes(current)) sel.value = current;
+}
+
+document.getElementById('btn-refresh').addEventListener('click', async ()=>{
+  await ensureRegistered();
+  ws.send(JSON.stringify({type:'list_drones'}));
+});
+
+async function connect(){
+  const droneId = document.getElementById('drone-select').value;
+  if(!droneId) return;
+  await ensureRegistered();
+  await startPeerConnection(droneId);
+}
+document.getElementById('btn-connect').addEventListener('click', connect);
+
+async function startPeerConnection(droneId){
+  // STUN alone gets you through many home NATs, not all - and not reliably over
+  // cellular/4G. Once you have a TURN server (e.g. self-hosted coturn on the same
+  // VPS as the signaling server), add it here as a second entry:
+  //   {urls:'turn:your-turn-server.example.com:3478', username:'...', credential:'...'}
+  pc = new RTCPeerConnection({iceServers:[
+    {urls:'stun:stun.l.google.com:19302'},
+  ]});
+
+  // MUST happen before createOffer() - see the note at the top of this script
+  pc.addTransceiver('video', {direction:'recvonly'});
+
+  pc.ontrack = (evt) => {
+    document.getElementById('remoteVideo').srcObject = evt.streams[0];
+  };
+
+  controlChannel = pc.createDataChannel('control', {ordered:false, maxRetransmits:0});
+  telemetryChannel = pc.createDataChannel('telemetry', {ordered:true});
+  telemetryChannel.onmessage = (evt) => {
+    try{ handleTelemetry(JSON.parse(evt.data)); }catch(e){}
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await waitForIceGatheringComplete(pc); // non-trickle, matches the Pi side
+
+  ws.send(JSON.stringify({type:'offer', target: droneId, sdp: pc.localDescription.sdp}));
+}
+
+/* ===================================================================
+   TELEMETRY DISPLAY
+   =================================================================== */
+function handleTelemetry(t){
+  document.getElementById('tel-roll').textContent = t.roll_deg?.toFixed(1) ?? '0.0';
+  document.getElementById('tel-pitch').textContent = t.pitch_deg?.toFixed(1) ?? '0.0';
+  document.getElementById('tel-yaw').textContent = t.yaw_deg?.toFixed(1) ?? '0.0';
+  document.getElementById('tel-alt').textContent = t.alt_cm ?? '0';
+  document.getElementById('tel-batt').textContent = t.battery_v?.toFixed(1) ?? '0.0';
+
+  const armedFlag = document.getElementById('armed-flag');
+  armedFlag.textContent = t.armed ? 'ARMED' : 'DISARMED';
+  armedFlag.style.color = t.armed ? 'var(--red)' : 'var(--phosphor-dim)';
+
+  const banner = document.getElementById('failsafe-banner');
+  banner.classList.remove('show','descend');
+  if(t.failsafe_descend){
+    banner.textContent = 'LINK LOST — DESCENDING';
+    banner.classList.add('show','descend');
+  } else if(t.failsafe_hold){
+    banner.textContent = 'LINK LOST — ATTITUDE HOLD (drifts, no GPS lock)';
+    banner.classList.add('show');
+  }
+}
+
+/* ===================================================================
+   ARM TOGGLE
+   =================================================================== */
+let armed = false;
+document.getElementById('btn-arm').addEventListener('click', ()=>{
+  armed = !armed;
+  document.getElementById('btn-arm').classList.toggle('armed-active', armed);
+  document.getElementById('btn-arm').textContent = armed ? 'DISARM' : 'ARM';
+});
+
+/* ===================================================================
+   WASD -> smoothed control vectors -> unreliable data channel @ 30Hz
+   -------------------------------------------------------------------
+   Raw keydown/keyup is binary and noisy - smoothing it into a continuous
+   value before sending is what keeps flight from being a series of jerks.
+   =================================================================== */
+const keys = {};
+window.addEventListener('keydown', e=>{ const k=e.key.toLowerCase(); keys[k]=true; if(k===' ') e.preventDefault(); });
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()]=false; });
+
+let smoothed = {roll:0, pitch:0, yaw_rate:0, throttle:0};
+const SMOOTH_RATE = 0.15; // per-tick easing toward the target, not an instant snap
+
+function targetFromKeys(){
+  let roll=0, pitch=0, yaw=0, thro=0;
+  if(keys['w']) pitch += 127;
+  if(keys['s']) pitch -= 127;
+  if(keys['d']) roll += 127;
+  if(keys['a']) roll -= 127;
+  if(keys['q']) yaw -= 127;
+  if(keys['e']) yaw += 127;
+  if(keys[' ']) thro += 255;
+  if(keys['shift']) thro -= 255;
+  return {roll, pitch, yaw_rate: yaw, throttle: Math.max(0, thro)};
+}
+
+setInterval(()=>{
+  const target = targetFromKeys();
+  smoothed.roll     += (target.roll - smoothed.roll) * SMOOTH_RATE;
+  smoothed.pitch    += (target.pitch - smoothed.pitch) * SMOOTH_RATE;
+  smoothed.yaw_rate += (target.yaw_rate - smoothed.yaw_rate) * SMOOTH_RATE;
+  smoothed.throttle += (target.throttle - smoothed.throttle) * SMOOTH_RATE;
+
+  document.getElementById('stick-dot').style.left = (50 + smoothed.roll/127*45) + '%';
+  document.getElementById('stick-dot').style.top  = (50 - smoothed.pitch/127*45) + '%';
+  document.getElementById('throttle-bar-fill').style.height = (smoothed.throttle/255*100) + '%';
+
+  if(controlChannel && controlChannel.readyState === 'open'){
+    controlChannel.send(JSON.stringify({
+      roll: Math.round(smoothed.roll),
+      pitch: Math.round(smoothed.pitch),
+      yaw_rate: Math.round(smoothed.yaw_rate),
+      throttle: Math.round(smoothed.throttle),
+      armed: armed,
+    }));
+  }
+}, 33); // ~30Hz, matches PROTOCOL_WEBRTC.md
+</script>
+</body>
+</html>
